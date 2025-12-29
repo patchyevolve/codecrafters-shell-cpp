@@ -6,6 +6,14 @@ int main() {
   std::cout << std::unitbuf;
   std::cerr << std::unitbuf;
 
-  // TODO: Uncomment the code below to pass the first stage
-  std::cout << "$ ";
+  while(true){
+    std::cout << "$ ";
+    std::string cmd;
+    std::getline(std::cin , cmd);
+    if(cmd == "exit"){ break;}
+    else{
+      std::cout << cmd << " : command not found" << std::endl ;
+    }
+  }
+  
 }
