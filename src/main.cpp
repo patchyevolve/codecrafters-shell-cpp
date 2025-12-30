@@ -4,8 +4,11 @@
 #include <cstdlib>   // getenv
 #include <unistd.h>  // access
 #include <sys/wait.h>
+#include <filesystem>
 
-std::vector<std::string> builtins = { "exit" , "echo" , "type"};
+namespace fs = std::filesystem;
+
+std::vector<std::string> builtins = { "exit" , "echo" , "type", "pwd"};
 
 bool is_Builtin(std::string command){
   for(auto builtin : builtins){
@@ -61,6 +64,16 @@ int main() {
       // exit command high priority check
       if(tokens[0] == "exit"){ 
         break;
+      }
+
+      else if(tokens[0] == "pwd"){
+        try {
+          fs::path currentPath = fs::current_path();
+          std::cout << currentPath.string()<<std::endl;
+        }
+        catch ( const fs::filesystem_error& e) {
+          std::cerr << "filesystem error : " << e.what() << std::endl;
+        }
       }
 
       // if builtin is echo used for printing the string in shell
