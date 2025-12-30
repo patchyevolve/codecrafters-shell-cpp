@@ -114,7 +114,7 @@ int main() {
           target = home;
 
         }
-        else if (tokens[1] == "-"){
+        else if (tokens[1] == "~"){
 
           char* old = getenv("OLDPWD");
 
