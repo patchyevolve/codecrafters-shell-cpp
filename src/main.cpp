@@ -8,15 +8,62 @@
 
 namespace fs = std::filesystem;
 
-std::vector<std::string> builtins = { "exit" , "echo" , "type", "pwd"};
+std::vector<std::string> builtins = { "exit" , "echo" , "type", "pwd", "cd"};
 
 bool is_Builtin(std::string command){
-  for(auto builtin : builtins){
+  for(const auto& builtin : builtins){
     if(command == builtin){
       return true;
     }
   }
   return false;
+}
+
+
+std::vector<std::string> tokenizer(std::string cmd){
+  //tokeniser for the prompt
+    std::vector<std::string> tokens;
+    std::string current;
+    bool in_quotes = false;
+    char quote_char = 0;
+
+    for (char c : cmd) {
+
+      if(in_quotes){
+        if( c == quote_char){
+          in_quotes = false;
+        }
+        else{
+          current += c;
+        }
+      }
+      else{
+        if(c == '"' || c == '\''){
+          in_quotes = true;
+          quote_char = c;
+        }
+        else if(isspace(static_cast<unsigned char>(c))) {
+          if(!current.empty()){
+            tokens.push_back(current);
+            current.clear();
+          }
+        }
+        else{
+          current += c;
+        }
+      }
+    }
+
+    if (in_quotes){
+      std::cerr <<  "error : unclosed quotes"<< std::endl;
+      return {};
+    }
+
+    if(!current.empty()){
+      tokens.push_back(current);
+    }
+
+    return tokens;
 }
 
 int main() {
@@ -34,29 +81,12 @@ int main() {
     std::string cmd;
     std::getline(std::cin , cmd);
 
-    //tokeniser for the prompt
     std::vector<std::string> tokens;
-    std::string current;
 
-    for (char c : cmd) {
-      if (c != ' '){
-        current += c;
-      }
-      else {
-        if(!current.empty()){
-          tokens.push_back(current);
-          current.clear();
-        }
-      }
-    }
-
-    if(!current.empty()){
-      tokens.push_back(current);
-    }
+    tokens = tokenizer(cmd);
 
     //empty token edge case
     if(tokens.empty()) continue;
-
 
     // main command loop
     if(is_Builtin(tokens[0])){
@@ -66,10 +96,57 @@ int main() {
         break;
       }
 
+      else if(tokens[0] == "cd"){
+
+
+        //resolving the target
+        std::string target;
+        fs::path old_pwd = fs::current_path();
+
+
+        if (tokens.size() == 1){
+
+          char* home = getenv("HOME");
+          if(!home){
+            std::cerr << "cd: HOME not set" << std::endl;
+            continue;
+          }
+          target = home;
+
+        }
+        else if (tokens[1] == "-"){
+
+          char* old = getenv("OLDPWD");
+
+          if(!old){
+            std::cerr << "cd: OLDPWD not set" << std::endl;
+            continue;
+          }
+          target = old;
+          
+          std::cout << target << std::endl;
+        }
+        else{
+          target = tokens[1];
+        }
+
+        //changing the directory
+        if(chdir(target.c_str()) != 0){
+          std::cout << "cd: " << target << ": No such file or directory" << std::endl;
+          continue;
+        }
+
+        //update the enviorment
+        fs::path new_pwd = fs::current_path();
+        setenv("OLDPWD", old_pwd.string().c_str(), 1);
+        setenv("PWD", new_pwd.string().c_str(), 1);
+
+      }
+
       else if(tokens[0] == "pwd"){
         try {
           fs::path currentPath = fs::current_path();
-          std::cout << currentPath.string()<<std::endl;
+          std::cout << currentPath.string() <<std::endl;
         }
         catch ( const fs::filesystem_error& e) {
           std::cerr << "filesystem error : " << e.what() << std::endl;
@@ -101,7 +178,7 @@ int main() {
           std::cout<< tokens[1] << " is a shell builtin" << std::endl;
         }
 
-        else if (!is_Builtin(tokens[1])){
+        else{
           
           //get path
           char* path_env = getenv("PATH");
