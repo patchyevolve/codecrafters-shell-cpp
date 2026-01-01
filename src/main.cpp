@@ -21,37 +21,57 @@ bool is_Builtin(std::string command){
 
 
 std::vector<std::string> tokenizer(std::string cmd){
+  
   //tokeniser for the prompt
     std::vector<std::string> tokens;
     std::string current;
     bool in_quotes = false;
     char quote_char = 0;
+    bool escape = false;
 
-    for (char c : cmd) {
+    for (char c : cmd){
 
-      if(in_quotes){
-        if( c == quote_char){
-          in_quotes = false;
+        if(escape){
+            current += c;
+            escape = false;
+            continue;
         }
-        else{
-          current += c;
+
+        if ( !in_quotes && c == '\\'){
+            escape = true;
+            continue;
         }
-      }
-      else{
-        if(c == '"' || c == '\''){
-          in_quotes = true;
-          quote_char = c;
+
+        if(in_quotes){
+            if (c == quote_char){
+                in_quotes = false;
+            }
+            else{
+                current += c;
+            }
+            continue;
         }
-        else if(isspace(static_cast<unsigned char>(c))) {
-          if(!current.empty()){
-            tokens.push_back(current);
-            current.clear();
-          }
+
+        if (c == '"' || c == '\'' ){
+            in_quotes = true;
+            quote_char = c;
+            continue;
         }
-        else{
-          current += c;
+
+        if (isspace(static_cast<unsigned char>(c))){
+            if(!current.empty()){
+                tokens.push_back(current);
+                current.clear();
+            }
+            continue;
         }
-      }
+
+        current += c;
+
+    }
+
+    if (escape) {
+        current += '\\';
     }
 
     if (in_quotes){
