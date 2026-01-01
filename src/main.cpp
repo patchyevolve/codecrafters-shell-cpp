@@ -21,17 +21,20 @@ bool is_Builtin(std::string command){
 
 
 std::vector<std::string> tokenizer(std::string cmd){
-  
-  //tokeniser for the prompt
+
     std::vector<std::string> tokens;
     std::string current;
+    
     bool in_quotes = false;
-    char quote_char = 0;
     bool escape = false;
+    char quote_char = 0;
 
-    for (char c : cmd){
 
-        if(escape){
+    for (size_t i = 0 ; i < cmd.size() ; i++){  //loop is changed to interating because in range loop its not possible to peek
+        char c = cmd[i];
+
+        //outside quotes : backslash escapes anything
+        if(!in_quotes && escape){
             current += c;
             escape = false;
             continue;
@@ -42,7 +45,38 @@ std::vector<std::string> tokenizer(std::string cmd){
             continue;
         }
 
-        if(in_quotes){
+        ///inside double quote
+        if( in_quotes && quote_char == '"'){
+
+          if(c == '\\'){
+            if( i + 1 < cmd.size()){
+                char next = cmd[i+1];
+                if ( next == '"' || next == '\\'){
+                    current += next;
+                    i++;
+                }
+                else{
+                    current += '\\';
+                }
+            }
+            else {
+                current += '\\';
+            }
+
+            continue;
+          }
+
+          if (c == '"'){
+            in_quotes = false;
+            continue;
+          }
+
+          current += c;
+          continue;
+        }
+
+        // inside single quote
+        if(in_quotes && quote_char == '\''){
             if (c == quote_char){
                 in_quotes = false;
             }
@@ -52,12 +86,14 @@ std::vector<std::string> tokenizer(std::string cmd){
             continue;
         }
 
+        //opening quote
         if (c == '"' || c == '\'' ){
             in_quotes = true;
             quote_char = c;
             continue;
         }
 
+        // whitespace
         if (isspace(static_cast<unsigned char>(c))){
             if(!current.empty()){
                 tokens.push_back(current);
@@ -66,10 +102,12 @@ std::vector<std::string> tokenizer(std::string cmd){
             continue;
         }
 
+        //normal character
         current += c;
 
     }
 
+    //trailing backslash outside quotes
     if (escape) {
         current += '\\';
     }
@@ -84,7 +122,7 @@ std::vector<std::string> tokenizer(std::string cmd){
     }
 
     return tokens;
-}
+} 
 
 int main() {
   // Flush after every std::cout / std:cerr
@@ -256,7 +294,7 @@ int main() {
             if(access(fullPath.c_str(), F_OK) != 0){
               continue;
             }
-            
+
             if(access(fullPath.c_str(), X_OK) != 0){
               continue;
             }
