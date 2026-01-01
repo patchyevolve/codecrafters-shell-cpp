@@ -114,7 +114,7 @@ int main() {
           target = home;
 
         }
-        else if (tokens[1] == "~"){
+        else if (tokens[1] == "-"){
 
           char* old = getenv("OLDPWD");
 
@@ -128,11 +128,32 @@ int main() {
         }
         else{
           target = tokens[1];
+
+          if(!target.empty() && target[0] == '~'){
+
+            char* home = getenv("HOME");
+            
+            if(!home){
+              std::cerr << "cd: HOME not set" << std::endl;
+              continue;
+            }
+
+            if(target.size() == 1 ){
+              target = home;
+            }
+            else if( target[1] == '/'){
+              target = std::string(home) + target.substr(1);
+            }
+
+          }
+
         }
+
+        
 
         //changing the directory
         if(chdir(target.c_str()) != 0){
-          std::cout << "cd: " << target << ": No such file or directory" << std::endl;
+          std::cerr << "cd: " << target << ": No such file or directory" << std::endl;
           continue;
         }
 
