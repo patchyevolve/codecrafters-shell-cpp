@@ -167,7 +167,7 @@ std::pair< std::vector<std::string>, std::vector<Redirection> > RD_tokens (const
 
     const std::string& tok = tokens[i];
 
-    if (tok == ">" || tok == ">>" || tok == "<" || tok == "2>" || tok == "2>>"){
+    if (tok == ">" || tok == "1>" || tok == ">>" || tok == "<" || tok == "2>" || tok == "2>>"){
 
       if (i + 1 == tokens.size()){
         throw std::runtime_error("missing filename");
@@ -186,7 +186,7 @@ std::pair< std::vector<std::string>, std::vector<Redirection> > RD_tokens (const
       }
 
 
-      if  (tok == ">" || tok == "2>"){
+      if  (tok == ">" || tok == "1>" || tok == "2>"){
         redir.mode = Redirection::TRUNC;
       }
       else if (tok == ">>" || tok == "2>>"){
