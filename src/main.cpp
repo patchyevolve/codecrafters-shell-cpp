@@ -11,8 +11,10 @@
 #include <array>
 
 namespace fs = std::filesystem;
+std::vector<std::string> history;
+const size_t HISTORY_LIMIT = 1000;
 
-std::vector<std::string> builtins = { "exit" , "echo" , "type", "pwd", "cd"};
+std::vector<std::string> builtins = { "exit" , "echo" , "type", "pwd", "cd", "history"};
 
 bool is_Builtin(std::string command){
   for(const auto& builtin : builtins){
@@ -28,7 +30,6 @@ struct Redirection {
   std::string filename;
   enum { TRUNC, APPEND, READ} mode;
 };
-
 
 struct FDSave{
   int in;
@@ -256,8 +257,7 @@ std::pair< std::vector<std::string>, std::vector<Redirection> > RD_tokens (const
 
 }
 
-
-void RD_apply( const std::vector<Redirection> redirs){
+bool RD_apply( const std::vector<Redirection>& redirs, bool in_child){
 
   for( const auto& r : redirs){
 
@@ -275,17 +275,19 @@ void RD_apply( const std::vector<Redirection> redirs){
 
     if(fd < 0){
       perror(r.filename.c_str());
-      _exit(1);
+      if(in_child) _exit(1);
+      return false;
     }
 
     if(dup2(fd, r.fd) < 0) {
         perror("dup2");
-        _exit(1);
+        if(in_child) _exit(1);
+        return false;
     }
     close(fd);
 
   }
-
+  return true;
 }
 
 struct command {
@@ -319,7 +321,7 @@ std::vector<command> parse_pipeline (const std::vector<std::string>& tokens){
 
   for(size_t i = 0; i < parts.size(); i++){
     if (parts[i].empty()) {
-      throw std::runtime_error("syntax error near enexpected token `|` ");
+      throw std::runtime_error("syntax error near unexpected token `|`");
     }
   }
 
@@ -329,7 +331,7 @@ std::vector<command> parse_pipeline (const std::vector<std::string>& tokens){
   for(auto & seg : parts){
     auto [argv_str, redirs] = RD_tokens(seg);
     if(argv_str.empty()){
-      throw std::runtime_error("syntax errror : empty commmand in pipeline");
+      throw std::runtime_error("syntax error: empty command in pipeline");
     }
 
     command c;
@@ -341,7 +343,6 @@ std::vector<command> parse_pipeline (const std::vector<std::string>& tokens){
 
   return cmds;
 }
-
 
 int run_builtin(const std::vector<std::string>& argv, bool in_child){
 
@@ -508,7 +509,32 @@ int run_builtin(const std::vector<std::string>& argv, bool in_child){
     return 1;
                 
   }
-            
+     
+  
+  else if (cmd == "history"){
+
+    if(argv.size() == 2 && argv[1] == "-c"){
+      history.clear();
+      return 0;
+    }
+
+    size_t start = 0;
+    if(argv.size() == 2){
+      try{
+        int n = std::stoi(argv[1]);
+        if(n < 0) n=0;
+        if((size_t)n < history.size()) start = history.size() - (size_t)n;
+      }catch(...){
+
+      }
+    }
+
+    for (size_t i = start; i < history.size(); ++i){
+      std::cout << (i+1) << " " << history[i] << std::endl;
+    }
+    return 0;
+  }
+
   return 1;     
 
 }
@@ -577,7 +603,7 @@ int execute_pipeline(const std::vector<command>& cmds){
       }
     
 
-      RD_apply(cmds[i].redirs);
+      if(!RD_apply(cmds[i].redirs, true)) _exit(1);
 
       if(cmds[i].is_builtin){
           int st = run_builtin(cmds[i].argv, true);
@@ -616,6 +642,52 @@ int execute_pipeline(const std::vector<command>& cmds){
 
 }
 
+bool expand_history(std::string& cmd, const std::vector<std::string>& history){
+  if(cmd.size() < 2 || cmd[0] != '!') return true;
+
+  if(cmd.find(' ') != std::string::npos) return true;
+
+  try{
+    if(cmd == "!!"){
+      if(history.empty()){
+        std::cerr << "history: event not found" << std::endl;
+        return false;
+      }
+      cmd = history.back();
+      std::cout << cmd << std::endl;
+      return true;
+    }
+
+    if(cmd.size() >=  3 && cmd[1] == '-'){
+      int n = std::stoi(cmd.substr(2));
+      if(n <= 0 || (size_t)n > history.size()){
+        std::cerr << "history: event not found" << std::endl;
+        return false;
+      }
+
+      cmd = history[history.size() - n];
+      std::cout << cmd << std::endl;
+      return true;
+    }
+
+
+    int idx = std::stoi(cmd.substr(1));
+    if(idx <= 0 || (size_t)idx > history.size()){
+      std::cerr << "history: event not found" << std::endl;
+      return false;
+    }
+
+    cmd = history[idx -1 ];
+    std::cout << cmd << std::endl;
+    return true;
+  }
+  catch(...){
+    std::cerr << "history: event not found" << std::endl;
+    return false;
+  }
+
+
+}
 
 int main() {
   // Flush after every std::cout / std:cerr
@@ -632,8 +704,30 @@ int main() {
     std::string cmd;
     std::getline(std::cin , cmd);
 
-    std::vector<std::string> tokens;
+    auto is_blank = [](const std::string& s){
+      for(char c : s) {
+        if (!isspace((unsigned char)c)){
+          return false;
+        }
+      }
+      return true;
+    };
 
+    if(is_blank(cmd)){
+      continue;
+    }
+
+    if(!expand_history(cmd , history)){
+      continue;
+    }
+
+    if(!is_blank(cmd)){
+      history.push_back(cmd);
+      if(history.size() > HISTORY_LIMIT) history.erase(history.begin());
+    }
+
+
+    std::vector<std::string> tokens;
     tokens = tokenizer(cmd);
 
     //empty token edge case
@@ -661,7 +755,10 @@ int main() {
 
       if (is_Builtin(argv_str[0])){
         FDSave saved = save_FD();
-        RD_apply(redirs);
+        if(!RD_apply(redirs,false)) {
+          restorFD(saved);
+          continue;
+        }
          
         if(argv_str[0] ==  "exit"){
           restorFD(saved);
@@ -683,7 +780,9 @@ int main() {
       }
 
       if(pid == 0) {
-        RD_apply(redirs);
+        if(!RD_apply(redirs,true)){
+          _exit(1);
+        }
         execvp(argv[0], argv.data());
         std::cerr << argv_str[0] << ": not found" << std::endl;
         _exit(127);
