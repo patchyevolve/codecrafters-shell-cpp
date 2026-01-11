@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fcntl.h>
 #include <cstdio>
+#include <array>
 
 namespace fs = std::filesystem;
 
@@ -124,6 +125,47 @@ std::vector<std::string> tokenizer(std::string cmd){
             continue;
         }
 
+        if (!in_quotes && c == '|'){
+          if(!current.empty()){
+            tokens.push_back(current);
+            current.clear();
+          }
+          tokens.push_back("|");
+          continue;
+        }
+
+        if (!in_quotes && (c == '>' || c == '<')){
+          if(!current.empty()){
+            tokens.push_back(current);
+            current.clear();
+          }
+        
+          
+          if (c == '>' && i+1 < cmd.size() && cmd[i+ 1] == '>') {
+            tokens.push_back(">>");
+            i++;
+          }else{
+            tokens.push_back(std::string(1,c));
+          }
+          continue;
+        }
+
+        if(!in_quotes && (c == '1' || c == '2') && i+1 < cmd.size() && cmd[i+1] == '>'){
+          if(!current.empty()){
+            tokens.push_back(current);
+            current.clear();
+          }
+
+          if(i+2 < cmd.size() && cmd[i+2] == '>'){
+            tokens.push_back(std::string(1,c) + ">>");
+            i += 2;
+          }else{
+            tokens.push_back(std::string(1,c) + ">");
+            i+=1;
+          }
+          continue;
+        }
+
         // whitespace
         if (isspace(static_cast<unsigned char>(c))){
             if(!current.empty()){
@@ -236,7 +278,6 @@ void RD_apply( const std::vector<Redirection> redirs){
       _exit(1);
     }
 
-    dup2(fd, r.fd);
     if(dup2(fd, r.fd) < 0) {
         perror("dup2");
         _exit(1);
@@ -246,6 +287,335 @@ void RD_apply( const std::vector<Redirection> redirs){
   }
 
 }
+
+struct command {
+  std::vector<std::string> argv;
+  std::vector<Redirection> redirs;
+  bool is_builtin = false;
+};
+
+std::vector<std::vector<std::string>> split_by_pipe (const std::vector<std::string>& tokens){
+
+  std::vector<std::vector<std::string>> parts;
+  std::vector<std::string> cur;
+
+  for (const auto& t : tokens){
+    if(t == "|"){
+      parts.push_back(cur);
+      cur.clear();
+    }
+    else {
+      cur.push_back(t);
+    }
+  }
+
+  parts.push_back(cur);
+  return parts;
+
+}
+
+std::vector<command> parse_pipeline (const std::vector<std::string>& tokens){
+  auto parts = split_by_pipe(tokens);
+
+  for(size_t i = 0; i < parts.size(); i++){
+    if (parts[i].empty()) {
+      throw std::runtime_error("syntax error near enexpected token `|` ");
+    }
+  }
+
+  std::vector<command> cmds;
+  cmds.reserve(parts.size());
+
+  for(auto & seg : parts){
+    auto [argv_str, redirs] = RD_tokens(seg);
+    if(argv_str.empty()){
+      throw std::runtime_error("syntax errror : empty commmand in pipeline");
+    }
+
+    command c;
+    c.argv = std::move(argv_str);
+    c.redirs = std::move(redirs);
+    c.is_builtin = is_Builtin(c.argv[0]);
+    cmds.push_back(std::move(c));
+  }
+
+  return cmds;
+}
+
+
+int run_builtin(const std::vector<std::string>& argv, bool in_child){
+
+  (void)in_child;
+  if(argv.empty()) return 0;
+  const std::string & cmd = argv[0];
+
+  if(cmd == "exit"){
+    return 0;
+  }
+
+  else if(cmd == "pwd"){
+    try{
+      fs::path currentPath = fs::current_path();
+      std::cout << currentPath.string() << std::endl;
+    }
+    catch (const fs::filesystem_error & e) {
+      std::cerr << "filesystem error : " << e.what() << std::endl;
+      return 1;
+    }
+    return 0;
+  }
+
+  else if (cmd == "echo") {
+    for( size_t i = 1 ; i < argv.size() ; ++i){
+            std::cout << argv[i];
+            if(i + 1 < argv.size()){
+              std::cout << " ";
+            }
+    }
+    std::cout << std::endl;
+    return 0;
+  }
+
+  else if(cmd == "cd"){
+
+    //resolving the target
+    std::string target;
+    fs::path old_pwd = fs::current_path();
+
+
+    if (argv.size() == 1){
+
+      char* home = getenv("HOME");
+      if(!home){
+        std::cerr << "cd: HOME not set" << std::endl;
+        return 1;
+      }
+      else { target = home; }
+
+    }
+    else if (argv[1] == "-"){
+
+      char* old = getenv("OLDPWD");
+
+      if(!old){
+        std::cerr << "cd: OLDPWD not set" << std::endl;
+        return 1;
+      }
+      else { target = old; }
+            
+    }
+  else{
+    target = argv[1];
+
+    if(!target.empty() && target[0] == '~'){
+
+      char* home = getenv("HOME");
+                
+      if(!home){
+      std::cerr << "cd: HOME not set" << std::endl;
+      }
+      else {
+        if(target.size() == 1 ){
+        target = home;
+        }
+        else if( target[1] == '/'){
+          target = std::string(home) + target.substr(1);
+        }
+      }
+    }
+  }
+
+  if(target.empty()){
+    return 1;
+  }
+  //changing the directory
+  else if(chdir(target.c_str()) != 0){
+    std::cerr << "cd: " << target << ": No such file or directory" << std::endl;
+    return 1;
+  }
+  else{
+    //update the enviorment
+    fs::path new_pwd = fs::current_path();
+    setenv("OLDPWD", old_pwd.string().c_str(), 1);
+    setenv("PWD", new_pwd.string().c_str(), 1);
+    }
+  return 0;
+
+  } 
+
+  else if (cmd == "type"){
+          
+          //if no commad is provide after the type edge case
+          if(argv.size() < 2){
+            std::cout << "type: missing operand\n";
+            return 1;
+          }
+          
+            // if the command after type are builtin then just showing they are built in
+            if(is_Builtin(argv[1])){
+              std::cout<< argv[1] << " is a shell builtin" << std::endl;
+              return 0;
+            }
+
+            
+              
+          //get path
+          char* path_env = getenv("PATH");
+          if(!path_env){
+            std::cout << argv[1] << ": not found" << std::endl;
+            return 1;
+          }
+
+              
+          //path seperation
+          std::vector<std::string> dirs;
+          std::string cop;
+
+          for(char *p = path_env; *p != '\0' ; ++p){ //path_env is not a std string
+            if( *p != ':'){
+              cop += *p;
+            }
+            else{
+              if(!cop.empty()){
+                dirs.push_back(cop);
+                cop.clear();
+              }
+            }
+          }
+          if(!cop.empty()){
+            dirs.push_back(cop);
+          }
+
+          //path lookup
+
+          for(const auto& dir : dirs){
+          std::string fullPath = dir + "/" + argv[1];
+
+            if(access(fullPath.c_str(), F_OK) != 0){
+              continue;
+            }
+
+            if(access(fullPath.c_str(), X_OK) != 0){
+              continue;
+            }
+
+            std::cout << argv[1] << " is " << fullPath << std::endl;    
+            return 0;
+          }
+
+                
+    std::cout << argv[1] << ": not found" << std::endl;
+    return 1;
+                
+  }
+            
+  return 1;     
+
+}
+
+std::vector<char*> make_argv(const std::vector<std::string> & args){
+
+  std::vector<char*> out;
+  out.reserve(args.size() +  1);
+  for(auto &s : args){
+    out.push_back(const_cast<char*>(s.c_str()));
+  }
+  out.push_back(nullptr);
+  return out;
+
+}
+
+int execute_pipeline(const std::vector<command>& cmds){
+  
+  int n = (int)cmds.size();
+  if(n == 0){
+    return 0;
+  }
+
+  std::vector<std::array<int, 2>> pipes;
+  pipes.resize(std::max(0, n-1));
+
+
+  for(int i = 0 ; i < n-1 ; i++){
+    if(pipe(pipes[i].data()) < 0){
+      perror("pipe");
+      return 1;
+    }
+  }
+
+  std::vector<pid_t> pids;
+  pids.reserve(n);
+
+  for(int i =0 ; i < n ; i++){
+    
+    pid_t pid = fork();
+
+    if(pid < 0){
+      perror("fork");
+      return 1;
+    }
+  
+
+    if(pid == 0){
+      if(i > 0){
+        if(dup2(pipes[i-1][0], 0) < 0){
+          perror("dup2 stdin");
+          _exit(1);
+        }
+      }
+      
+      if(i < n -1 ){
+        if(dup2(pipes[i][1], 1) < 0){
+          perror("dup2 stdout");
+          _exit(1);
+        }
+      }
+
+      for (int k =0 ; k < n-1 ; k++){
+        close(pipes[k][0]);
+        close(pipes[k][1]);
+      }
+    
+
+      RD_apply(cmds[i].redirs);
+
+      if(cmds[i].is_builtin){
+          int st = run_builtin(cmds[i].argv, true);
+          _exit(st);
+      }
+      else{
+         auto argv = make_argv(cmds[i].argv);
+          execvp(argv[0], argv.data());
+          std::cerr << cmds[i].argv[0] << ": not found " << std::endl;
+          _exit(127);
+      }
+    }
+    
+    pids.push_back(pid);
+
+  }
+
+  for(int i = 0 ; i < n-1 ; i++){
+    close(pipes[i][0]);
+    close(pipes[i][1]);
+  }
+
+  int last_status = 0;
+  for(int i = 0 ; i < n ; i++){
+    int st =0 ;
+    waitpid(pids[i], &st, 0);
+    if(i == n-1 ){
+      last_status = st;
+    }
+  }
+
+  if(WIFEXITED(last_status)){
+    return WEXITSTATUS(last_status);
+  }
+  return 1;
+
+}
+
 
 int main() {
   // Flush after every std::cout / std:cerr
@@ -269,223 +639,60 @@ int main() {
     //empty token edge case
     if(tokens.empty()) continue;
 
+    bool has_pipes = false;
+    for(auto& t : tokens){
+      if(t == "|"){
+        has_pipes = true;
+        break;
+      }
+    }
+
     // main command loop
     try{
 
-      auto [argv_str, redirs] = RD_tokens(tokens);
-
-      if( argv_str.empty()) {
+      if(has_pipes){
+        auto cmds = parse_pipeline(tokens);
+        execute_pipeline(cmds);
         continue;
       }
 
-      if (is_Builtin(argv_str[0])){
+      auto [argv_str, redirs] = RD_tokens(tokens);
+      if(argv_str.empty()) continue;
 
-        // exit command high priority check
-        if(argv_str[0] == "exit"){ 
+      if (is_Builtin(argv_str[0])){
+        FDSave saved = save_FD();
+        RD_apply(redirs);
+         
+        if(argv_str[0] ==  "exit"){
+          restorFD(saved);
           break;
         }
 
-        FDSave saved = save_FD();
-
-        RD_apply(redirs);
-
-        if(argv_str[0] == "cd"){
-
-
-          //resolving the target
-          std::string target;
-          fs::path old_pwd = fs::current_path();
-
-
-          if (argv_str.size() == 1){
-
-            char* home = getenv("HOME");
-            if(!home){
-              std::cerr << "cd: HOME not set" << std::endl;
-              continue;
-            }
-            target = home;
-
-          }
-          else if (argv_str[1] == "-"){
-
-            char* old = getenv("OLDPWD");
-
-            if(!old){
-              std::cerr << "cd: OLDPWD not set" << std::endl;
-              continue;
-            }
-            target = old;
-            
-            std::cout << target << std::endl;
-          }
-          else{
-            target = argv_str[1];
-
-            if(!target.empty() && target[0] == '~'){
-
-              char* home = getenv("HOME");
-              
-              if(!home){
-                std::cerr << "cd: HOME not set" << std::endl;
-                continue;
-              }
-
-              if(target.size() == 1 ){
-                target = home;
-              }
-              else if( target[1] == '/'){
-                target = std::string(home) + target.substr(1);
-              }
-
-            }
-
-          }
-
-          
-
-          //changing the directory
-          if(chdir(target.c_str()) != 0){
-            std::cerr << "cd: " << target << ": No such file or directory" << std::endl;
-            continue;
-          }
-
-          //update the enviorment
-          fs::path new_pwd = fs::current_path();
-          setenv("OLDPWD", old_pwd.string().c_str(), 1);
-          setenv("PWD", new_pwd.string().c_str(), 1);
-
-        }
-
-        else if(argv_str[0] == "pwd"){
-          try {
-            fs::path currentPath = fs::current_path();
-            std::cout << currentPath.string() <<std::endl;
-          }
-          catch ( const fs::filesystem_error& e) {
-            std::cerr << "filesystem error : " << e.what() << std::endl;
-          }
-        }
-
-        // if builtin is echo used for printing the string in shell
-        else if ( argv_str[0] == "echo"){
-          for( size_t i = 1 ; i < argv_str.size() ; ++i){
-            std::cout << argv_str[i];
-            if(i + 1 < argv_str.size()){
-              std::cout << " ";
-            }
-          }
-          std::cout << std::endl;
-        }
-
-        // if builtin is type used for checking the info and path {if not builtin}
-        else if (argv_str[0] == "type"){
-          
-          //if no commad is provide after the type edge case
-          if(argv_str.size() < 2){
-            std::cout << "type: missing operand\n";
-            continue;
-          }
-
-          // if the command after type are builtin then just showing they are built in
-          if(is_Builtin(argv_str[1])){
-            std::cout<< argv_str[1] << " is a shell builtin" << std::endl;
-          }
-
-          else{
-            
-            //get path
-            char* path_env = getenv("PATH");
-            if(!path_env){
-              std::cout << argv_str[1] << ": not found" << std::endl;
-              continue;
-            }
-
-            //path seperation
-            std::vector<std::string> dirs;
-            std::string cop;
-
-            for(char *p = path_env; *p != '\0' ; ++p){ //path_env is not a std string
-              if( *p != ':'){
-                cop += *p;
-              }
-              else{
-                if(!cop.empty()){
-                  dirs.push_back(cop);
-                  cop.clear();
-                }
-              }
-            }
-            if(!cop.empty()){
-              dirs.push_back(cop);
-            }
-
-            //path lookup
-            bool found = false;
-
-            for(const auto& dir : dirs){
-              std::string fullPath = dir + "/" + argv_str[1];
-
-              if(access(fullPath.c_str(), F_OK) != 0){
-                continue;
-              }
-
-              if(access(fullPath.c_str(), X_OK) != 0){
-                continue;
-              }
-
-              std::cout << argv_str[1] << " is " << fullPath << std::endl;
-              found = true;
-              break;
-            }
-
-            if(!found){
-              std::cout << argv_str[1] << ": not found" << std::endl;
-            }
-          }
-
-          continue;
-
-        }
-
+        run_builtin(argv_str, false);
         restorFD(saved);
+        continue;
 
       }
 
-      //the case for executing the non built in commands for external programs
+      std::vector<char*> argv = make_argv(argv_str);
+
+      pid_t pid = fork();
+      if(pid < 0){
+        perror("fork");
+        continue;
+      }
+
+      if(pid == 0) {
+        RD_apply(redirs);
+        execvp(argv[0], argv.data());
+        std::cerr << argv_str[0] << ": not found" << std::endl;
+        _exit(127);
+      }
       else{
-        
-          //building args from tokens
-          std::vector<char*> argv;
-          for(const auto& s : argv_str){
-            argv.push_back(const_cast<char*>(s.c_str()));
-          }
-          argv.push_back(nullptr);
-
-
-          //forking it (to make the child run the process so that the program doesnt look hanged)
-          pid_t pid = fork();
-
-          if(pid < 0){
-            perror("fork");
-            continue;
-          }
-          
-          if (pid == 0){
-
-            //applyiing redirections
-            RD_apply(redirs);
-            
-            //child run the programs if run nothing return but if it doesnt error then exit
-            execvp(argv[0], argv.data());
-            std::cerr << argv_str[0] << ": not found" << std::endl;
-            _exit(127);
-          }else{
-            //parent wait 
-            int status;
-            waitpid(pid, &status, 0);
-          }
+        int status;
+        waitpid(pid, &status, 0);
       }
+
     }
     catch(const std::exception& e){
       std::cerr << e.what() << std::endl;
