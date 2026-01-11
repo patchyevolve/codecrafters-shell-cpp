@@ -9,6 +9,9 @@
 #include <fcntl.h>
 #include <cstdio>
 #include <array>
+#include <readline/readline.h>
+#include <readline/history.h>
+
 
 namespace fs = std::filesystem;
 std::vector<std::string> history;
@@ -696,13 +699,14 @@ int main() {
 
   while(true){
     
-    // intitial
-    std::cout << "$ ";
-    
+    char* line = readline("$ ");
+    if(!line){
+      std::cout << std::endl;
+      break;
+    }
 
-    //main command prompt
-    std::string cmd;
-    std::getline(std::cin , cmd);
+    std::string cmd(line);
+    free(line);
 
     auto is_blank = [](const std::string& s){
       for(char c : s) {
@@ -726,6 +730,7 @@ int main() {
       if(history.size() > HISTORY_LIMIT) history.erase(history.begin());
     }
 
+    add_history(cmd.c_str());
 
     std::vector<std::string> tokens;
     tokens = tokenizer(cmd);
