@@ -20,6 +20,78 @@ const size_t HISTORY_LIMIT = 1000;
 std::string HISTFILE;
 size_t session_start_index = 0;
 
+enum class histpersistence { WRITE , APPEND };
+constexpr histpersistence HIST_MODE = histpersistence::APPEND;
+
+//funtion to resolve histfile
+std::string get_histfile(){
+
+  const char* hf = getenv("HISTFILE");
+  if(hf && *hf){
+    return hf;
+  }
+
+  const char* home = getenv("HOME");
+  if(home && *home){
+    return std::string(home) + "/.my_shell_history";
+  }
+
+  return ".my_shell_history";
+}
+
+//read history on startup
+size_t history_read_file(const std::string& path){
+
+  std::ifstream in(path);
+  if(!in.is_open()) return 0;
+
+  size_t before = history.size();
+
+  std::string line;
+  while (std::getline(in, line)){
+    if(line.empty()){
+      continue;
+    }
+    history.push_back(line);
+  }
+
+  if(history.size() > HISTORY_LIMIT){
+    size_t extra = history.size() - HISTORY_LIMIT;
+    history.erase(history.begin() , history.begin() + extra);
+  }
+
+  size_t after = history.size();
+  return (after > before) ? (after - before) : 0;
+
+} 
+
+//write history file (overwrite)
+bool history_write_file(const std::string& path){
+  std::ofstream out(path , std::ios::trunc);
+  if(!out.is_open()) return false;
+
+  for(auto& cmd : history){
+    out << cmd << std::endl;
+  }
+
+  return true;
+}
+
+//appending new command on exit
+bool history_append_file (const std::string& path , size_t from_index){
+  if(from_index > history.size()){
+    return true;
+  }
+
+  std::ofstream out(path, std::ios::app);
+  if(!out.is_open()) return false;
+
+  for (size_t i = from_index; i < history.size(); ++i){
+    out << history[i] << std::endl;
+  }
+  return true;
+}
+
 std::vector<std::string> builtins = { "exit" , "echo" , "type", "pwd", "cd", "history"};
 
 bool is_Builtin(std::string command){
@@ -519,8 +591,23 @@ int run_builtin(const std::vector<std::string>& argv, bool in_child){
   
   else if (cmd == "history"){
 
+    if(argv.size() ==  3 && argv[1] == "-r"){
+      size_t added = history_read_file(argv[2]);
+
+      size_t start = (added <= history.size()) ? (history.size() - added) : 0;
+      for (size_t i = start; i < history.size(); ++i){
+        add_history(history[i].c_str());
+      }
+
+      session_start_index = history.size();
+      return 0;
+    }
+
     if(argv.size() == 2 && argv[1] == "-c"){
       history.clear();
+      clear_history();
+      std::ofstream(HISTFILE, std::ios::trunc).close();
+      session_start_index = 0;
       return 0;
     }
 
@@ -660,7 +747,7 @@ bool expand_history(std::string& cmd, const std::vector<std::string>& history){
         return false;
       }
       cmd = history.back();
-      std::cout << cmd << std::endl;
+      
       return true;
     }
 
@@ -672,7 +759,7 @@ bool expand_history(std::string& cmd, const std::vector<std::string>& history){
       }
 
       cmd = history[history.size() - n];
-      std::cout << cmd << std::endl;
+      
       return true;
     }
 
@@ -684,7 +771,7 @@ bool expand_history(std::string& cmd, const std::vector<std::string>& history){
     }
 
     cmd = history[idx -1 ];
-    std::cout << cmd << std::endl;
+    
     return true;
   }
   catch(...){
@@ -694,66 +781,7 @@ bool expand_history(std::string& cmd, const std::vector<std::string>& history){
 
 }
 
-//funtion to resolve histfile
-std::string get_histfile(){
 
-  const char* hf = getenv("HISTFILE");
-  if(hf && *hf){
-    return hf;
-  }
-
-  const char* home = getenv("HOME");
-  if(home && *home){
-    return std::string(home) + "/.my_shell_history";
-  }
-
-  return ".my_shell_history";
-}
-
-//read history on startup
-void history_read_file(const std::string& path){
-
-  std::ifstream in(path);
-  if(!in.is_open()) return ;
-
-  std::string line;
-  while(std::getline(in, line)){
-    if(line.empty()){
-      continue;
-    }
-    history.push_back(line);
-    if(history.size() > HISTORY_LIMIT) {
-      history.erase(history.begin());
-    }
-  }
-} 
-
-//write history file (overwrite)
-bool history_write_file(const std::string& path){
-  std::ofstream out(path , std::ios::app);
-  if(!out.is_open()) return false;
-
-  for(auto& cmd : history){
-    out << cmd << std::endl;
-  }
-
-  return true;
-}
-
-//appending new command on exit
-bool history_append_file (const std::string& path , size_t from_index){
-  if(from_index > history.size()){
-    return true;
-  }
-
-  std::ofstream out(path, std::ios::app);
-  if(!out.is_open()) return false;
-
-  for (size_t i = from_index; i < history.size(); ++i){
-    out << history[i] << std::endl;
-  }
-  return true;
-}
 
 int main() {
   // Flush after every std::cout / std:cerr
@@ -761,9 +789,9 @@ int main() {
   std::cerr << std::unitbuf;
 
   HISTFILE = get_histfile();
+  stifle_history((int)HISTORY_LIMIT);
   history_read_file(HISTFILE);
   session_start_index = history.size();
-
   for(auto& h : history) add_history(h.c_str());
 
   while(true){
@@ -771,7 +799,12 @@ int main() {
     char* line = readline("$ ");
     if(!line){
       std::cout << std::endl;
-      history_append_file(HISTFILE, session_start_index);
+      if constexpr (HIST_MODE == histpersistence::APPEND){
+        history_append_file(HISTFILE, session_start_index);
+      }
+      else {
+        history_write_file(HISTFILE);
+      }
       break;
     }
 
@@ -795,18 +828,32 @@ int main() {
       continue;
     }
 
-    if(!is_blank(cmd)){
-      history.push_back(cmd);
-      if(history.size() > HISTORY_LIMIT) history.erase(history.begin());
-    }
-
-    add_history(cmd.c_str());
 
     std::vector<std::string> tokens;
     tokens = tokenizer(cmd);
-
-    //empty token edge case
     if(tokens.empty()) continue;
+
+    bool store_in_history = true;
+    if(tokens[0] == "history"){
+
+      if(tokens.size() ==  2 && tokens[1] == "-c"){
+        store_in_history = false;
+      }
+      else if(tokens.size() == 3 && tokens[1] == "-r" ){
+        store_in_history = false;
+      }
+    }
+
+    if(store_in_history){
+      history.push_back(cmd);
+
+      if(history.size() > HISTORY_LIMIT){
+        size_t extra = history.size() - HISTORY_LIMIT;
+        history.erase(history.begin() , history.begin() + extra);
+      }
+
+      add_history(cmd.c_str());
+    }
 
     bool has_pipes = false;
     for(auto& t : tokens){
@@ -837,7 +884,12 @@ int main() {
          
         if(argv_str[0] ==  "exit"){
           restorFD(saved);
-          history_append_file(HISTFILE, session_start_index);
+          if constexpr (HIST_MODE == histpersistence::APPEND){
+            history_append_file(HISTFILE, session_start_index);
+          }
+          else {
+            history_write_file(HISTFILE);
+          }
           break;
         }
 
