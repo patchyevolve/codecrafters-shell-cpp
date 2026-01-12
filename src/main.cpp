@@ -15,6 +15,7 @@
 #include <cstring>
 #include <cctype>
 #include <cerrno>
+#include <algorithm>
 
 
 namespace fs = std::filesystem;
@@ -216,6 +217,7 @@ static char** shell_completion(const char* text , int start, int end){
       if(seen.insert(e).second) completion_pool.push_back(e);
     }
 
+    std::sort(completion_pool.begin(), completion_pool.end());
     return rl_completion_matches(text, completion_generator);
   }
 
@@ -224,7 +226,6 @@ static char** shell_completion(const char* text , int start, int end){
 
 static void init_readline_completion(){
   rl_attempted_completion_function = shell_completion;
-  rl_sort_completion_matches = 0;
 }
 
 struct Redirection {
