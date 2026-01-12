@@ -11,6 +11,10 @@
 #include <array>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <unordered_set>
+#include <cstring>
+#include <cctype>
+#include <cerrno>
 
 
 namespace fs = std::filesystem;
@@ -22,6 +26,13 @@ size_t session_start_index = 0;
 
 enum class histpersistence { WRITE , APPEND };
 constexpr histpersistence HIST_MODE = histpersistence::APPEND;
+
+static std::vector<std::string> completion_pool;
+
+static std::vector<std::string> path_exec_cache;
+static std::string cached_path_env;
+
+static bool path_cache_built = false;
 
 //funtion to resolve histfile
 std::string get_histfile(){
@@ -103,6 +114,119 @@ bool is_Builtin(std::string command){
   return false;
 }
 
+static inline bool starts_with(const std::string&s ,const std::string& pref){
+  return s.size() >= pref.size() && s.compare(0, pref.size(), pref ) == 0;
+}
+
+static bool only_spaces_befor_start(int start){
+  for(int i =0 ; i < start; i++){
+  if(!isspace((unsigned char)rl_line_buffer[i])) return false;
+  }   
+  return true;
+}
+
+static std::vector<std::string> split_path_env (const std::string& path_env){
+
+  std::vector<std::string> dirs;
+
+  size_t i =0;
+  while( i <= path_env.size()){
+    size_t j = path_env.find(':',i);
+    std::string part = (j == std::string::npos) ? path_env.substr(i) : path_env.substr(i, j-i);
+    if (part.empty()){
+      part = ".";
+    }
+    dirs.push_back(part);
+    if(j == std::string::npos) break;
+    i = j+ 1;
+  }
+  return dirs;
+}
+
+static void rebuild_path_exec_cache(){
+  const char* env = getenv("PATH");
+  std::string cur = env ? std::string(env) : std::string();
+
+  if(cur == cached_path_env && path_cache_built) return;
+
+  cached_path_env = cur;
+  path_exec_cache.clear();
+  path_cache_built= true;
+
+  std::unordered_set<std::string> seen;
+  auto dirs = split_path_env(cur);
+
+  for(const auto& dir : dirs){
+    try {
+      for(const auto& entry : fs::directory_iterator(dir)){
+        if(!entry.is_regular_file()) continue;
+
+        auto p = entry.path();
+        std::string name = p.filename().string();
+        if(!name.empty() && name[0] == '.') continue;
+        std::string full = p.string();
+        if(access(full.c_str() , X_OK) != 0) continue;
+        
+        if(seen.insert(name).second){
+          path_exec_cache.push_back(name);
+        }
+      }
+    }
+    catch(...) {
+      //unreadable dirs
+    }
+  }
+}
+
+//readline generator
+static char* completion_generator(const char* text, int state){
+  static size_t idx =0;
+  if(state == 0) idx = 0;
+
+  std::string pref = text? std::string(text) : std::string();
+
+  while (idx < completion_pool.size()){
+    const std::string& cand = completion_pool[idx++];
+    if(starts_with(cand, pref)){
+      return strdup(cand.c_str());
+    }
+  }
+  return nullptr;
+}
+
+
+
+//readline completion callback
+static char** shell_completion(const char* text , int start, int end){
+  (void)end;
+
+
+  if(start ==  0 || only_spaces_befor_start(start)){
+    completion_pool.clear();
+
+    std::unordered_set<std::string> seen;
+
+    for(auto& b : builtins) {
+      if(seen.insert(b).second) completion_pool.push_back(b);
+    }
+
+    rebuild_path_exec_cache();
+
+    for(auto& e : path_exec_cache){ 
+      if(seen.insert(e).second) completion_pool.push_back(e);
+    }
+
+    return rl_completion_matches(text, completion_generator);
+  }
+
+  return nullptr;
+}
+
+static void init_readline_completion(){
+  rl_attempted_completion_function = shell_completion;
+  rl_sort_completion_matches = 0;
+}
+
 struct Redirection {
   int fd;
   std::string filename;
@@ -142,120 +266,120 @@ std::vector<std::string> tokenizer(std::string cmd){
 
 
     for (size_t i = 0 ; i < cmd.size() ; i++){  //loop is changed to interating because in range loop its not possible to peek
-        char c = cmd[i];
+      char c = cmd[i];
 
-        //outside quotes : backslash escapes anything
-        if(!in_quotes && escape){
-            current += c;
-            escape = false;
-            continue;
-        }
+      //outside quotes : backslash escapes anything
+      if(!in_quotes && escape){
+        current += c;
+        escape = false;
+        continue;
+      }
 
-        if ( !in_quotes && c == '\\'){
-            escape = true;
-            continue;
-        }
+      if ( !in_quotes && c == '\\'){
+        escape = true;
+        continue;
+      }
 
-        //inside double quote
-        if( in_quotes && quote_char == '"'){
+      //inside double quote
+      if( in_quotes && quote_char == '"'){
 
-          if(c == '\\'){
-            if( i + 1 < cmd.size()){
-                char next = cmd[i+1];
-                if ( next == '"' || next == '\\'){
-                    current += next;
-                    i++;
-                }
-                else{
-                    current += '\\';
-                }
-            }
-            else {
-                current += '\\';
-            }
-
-            continue;
-          }
-
-          if (c == '"'){
-            in_quotes = false;
-            continue;
-          }
-
-          current += c;
-          continue;
-        }
-
-        // inside single quote
-        if(in_quotes && quote_char == '\''){
-            if (c == quote_char){
-                in_quotes = false;
+        if(c == '\\'){
+          if( i + 1 < cmd.size()){
+            char next = cmd[i+1];
+            if ( next == '"' || next == '\\'){
+              current += next;
+              i++;
             }
             else{
-                current += c;
+              current += '\\';
             }
-            continue;
-        }
-
-        //opening quote
-        if (c == '"' || c == '\'' ){
-            in_quotes = true;
-            quote_char = c;
-            continue;
-        }
-
-        if (!in_quotes && c == '|'){
-          if(!current.empty()){
-            tokens.push_back(current);
-            current.clear();
           }
-          tokens.push_back("|");
+          else {
+            current += '\\';
+          }
+
           continue;
         }
 
-        if (!in_quotes && (c == '>' || c == '<')){
-          if(!current.empty()){
-            tokens.push_back(current);
-            current.clear();
-          }
+        if (c == '"'){
+          in_quotes = false;
+          continue;
+        }
+
+        current += c;
+        continue;
+      }
+
+       // inside single quote
+      if(in_quotes && quote_char == '\''){
+        if (c == quote_char){
+          in_quotes = false;
+        }
+        else{
+          current += c;
+        }
+        continue;
+      }
+
+       //opening quote
+      if (c == '"' || c == '\'' ){
+        in_quotes = true;
+        quote_char = c;
+        continue;
+      }
+
+      if (!in_quotes && c == '|'){
+        if(!current.empty()){
+          tokens.push_back(current);
+          current.clear();
+        }  
+        tokens.push_back("|");
+        continue;
+      }
+
+      if (!in_quotes && (c == '>' || c == '<')){
+        if(!current.empty()){
+          tokens.push_back(current);
+          current.clear();
+        }
         
           
-          if (c == '>' && i+1 < cmd.size() && cmd[i+ 1] == '>') {
-            tokens.push_back(">>");
-            i++;
-          }else{
-            tokens.push_back(std::string(1,c));
-          }
-          continue;
+        if (c == '>' && i+1 < cmd.size() && cmd[i+ 1] == '>') {
+          tokens.push_back(">>");
+          i++;
+        }else{
+          tokens.push_back(std::string(1,c));
+        }
+        continue;
+      }
+
+      if(!in_quotes && (c == '1' || c == '2') && i+1 < cmd.size() && cmd[i+1] == '>'){
+        if(!current.empty()){
+          tokens.push_back(current);
+          current.clear();
         }
 
-        if(!in_quotes && (c == '1' || c == '2') && i+1 < cmd.size() && cmd[i+1] == '>'){
-          if(!current.empty()){
-            tokens.push_back(current);
-            current.clear();
-          }
-
-          if(i+2 < cmd.size() && cmd[i+2] == '>'){
-            tokens.push_back(std::string(1,c) + ">>");
-            i += 2;
-          }else{
-            tokens.push_back(std::string(1,c) + ">");
-            i+=1;
-          }
-          continue;
+        if(i+2 < cmd.size() && cmd[i+2] == '>'){
+          tokens.push_back(std::string(1,c) + ">>");
+          i += 2;
+        }else{
+          tokens.push_back(std::string(1,c) + ">");
+          i+=1;
         }
+        continue;
+      }
 
-        // whitespace
-        if (isspace(static_cast<unsigned char>(c))){
-            if(!current.empty()){
-                tokens.push_back(current);
-                current.clear();
-            }
-            continue;
+      // whitespace
+      if (isspace(static_cast<unsigned char>(c))){
+        if(!current.empty()){
+          tokens.push_back(current);
+          current.clear();
         }
+        continue;
+      }
 
-        //normal character
-        current += c;
+      //normal character
+      current += c;
 
     }
 
@@ -799,8 +923,6 @@ bool expand_history(std::string& cmd, const std::vector<std::string>& history){
 
 }
 
-
-
 int main() {
   // Flush after every std::cout / std:cerr
   std::cout << std::unitbuf;
@@ -811,6 +933,8 @@ int main() {
   history_read_file(HISTFILE);
   session_start_index = history.size();
   for(auto& h : history) add_history(h.c_str());
+
+  init_readline_completion();
 
   while(true){
     
