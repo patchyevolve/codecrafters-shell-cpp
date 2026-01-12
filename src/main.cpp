@@ -14,8 +14,11 @@
 
 
 namespace fs = std::filesystem;
+
 std::vector<std::string> history;
 const size_t HISTORY_LIMIT = 1000;
+std::string HISTFILE;
+size_t session_start_index = 0;
 
 std::vector<std::string> builtins = { "exit" , "echo" , "type", "pwd", "cd", "history"};
 
@@ -689,7 +692,67 @@ bool expand_history(std::string& cmd, const std::vector<std::string>& history){
     return false;
   }
 
+}
 
+//funtion to resolve histfile
+std::string get_histfile(){
+
+  const char* hf = getenv("HISTFILE");
+  if(hf && *hf){
+    return hf;
+  }
+
+  const char* home = getenv("HOME");
+  if(home && *home){
+    return std::string(home) + "/.my_shell_history";
+  }
+
+  return ".my_shell_history";
+}
+
+//read history on startup
+void history_read_file(const std::string& path){
+
+  std::ifstream in(path);
+  if(!in.is_open()) return ;
+
+  std::string line;
+  while(std::getline(in, line)){
+    if(line.empty()){
+      continue;
+    }
+    history.push_back(line);
+    if(history.size() > HISTORY_LIMIT) {
+      history.erase(history.begin());
+    }
+  }
+} 
+
+//write history file (overwrite)
+bool history_write_file(const std::string& path){
+  std::ofstream out(path , std::ios::app);
+  if(!out.is_open()) return false;
+
+  for(auto& cmd : history){
+    out << cmd << std::endl;
+  }
+
+  return true;
+}
+
+//appending new command on exit
+bool history_append_file (const std::string& path , size_t from_index){
+  if(from_index > history.size()){
+    return true;
+  }
+
+  std::ofstream out(path, std::ios::app);
+  if(!out.is_open()) return false;
+
+  for (size_t i = from_index; i < history.size(); ++i){
+    out << history[i] << std::endl;
+  }
+  return true;
 }
 
 int main() {
@@ -697,11 +760,18 @@ int main() {
   std::cout << std::unitbuf;
   std::cerr << std::unitbuf;
 
+  HISTFILE = get_histfile();
+  history_read_file(HISTFILE);
+  session_start_index = history.size();
+
+  for(auto& h : history) add_history(h.c_str());
+
   while(true){
     
     char* line = readline("$ ");
     if(!line){
       std::cout << std::endl;
+      history_append_file(HISTFILE, session_start_index);
       break;
     }
 
@@ -767,6 +837,7 @@ int main() {
          
         if(argv_str[0] ==  "exit"){
           restorFD(saved);
+          history_append_file(HISTFILE, session_start_index);
           break;
         }
 
