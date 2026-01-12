@@ -591,12 +591,21 @@ int run_builtin(const std::vector<std::string>& argv, bool in_child){
   
   else if (cmd == "history"){
 
+    if(argv.size() == 3 && argv[1] == "-a"){
+      if(!history_append_file(argv[2], session_start_index)){
+        std::cerr << "history: failed to append file" << std::endl;
+        return 1;
+      }
+      session_start_index = history.size();
+      return 0;
+    }
 
     if(argv.size() == 3 && argv[1] == "-w"){
       if(!history_write_file(argv[2])){
         std::cerr << "history: failed to write file" << std::endl;
         return 1;
       }
+      session_start_index = history.size();
       return 0;
     }
 
