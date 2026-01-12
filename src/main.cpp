@@ -840,7 +840,7 @@ int main() {
         store_in_history = false;
       }
       else if(tokens.size() == 3 && tokens[1] == "-r" ){
-        store_in_history = false;
+        store_in_history = true;
       }
     }
 
