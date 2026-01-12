@@ -591,6 +591,15 @@ int run_builtin(const std::vector<std::string>& argv, bool in_child){
   
   else if (cmd == "history"){
 
+
+    if(argv.size() == 3 && argv[1] == "-w"){
+      if(!history_write_file(argv[2])){
+        std::cerr << "history: failed to write file" << std::endl;
+        return 1;
+      }
+      return 0;
+    }
+
     if(argv.size() ==  3 && argv[1] == "-r"){
       size_t added = history_read_file(argv[2]);
 
