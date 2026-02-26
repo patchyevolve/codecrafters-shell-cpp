@@ -221,7 +221,7 @@ static char** shell_completion(const char* text , int start, int end){
     return rl_completion_matches(text, completion_generator);
   }
 
-  return nullptr;
+  return rl_completion_matches(text, rl_filename_completion_function);
 }
 
 static void init_readline_completion(){
